@@ -6,22 +6,23 @@ Video stream delivered via MJPEG over HTTP.
 Runs on http://localhost:5050
 """
 
+import base64
+import logging
 import os
-import cv2
-import numpy as np
-import torch
-import timm
 import threading
 import time
-import base64
 from collections import deque
 from datetime import datetime
-from flask import Flask, jsonify, Response
+
+import cv2
+import numpy as np
+import timm
+import torch
+from flask import Flask, Response, jsonify
 from flask_cors import CORS
-import logging
 
 # ====================== CONFIG ======================
-STREAM_URL = "http://admin:12345@192.168.79.148:8081/live.flv"  # Replace with actual
+STREAM_URL = "http://10.238.147.134:5000/video_feed"  # Replace with actual
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 MODEL_PATH = os.path.join(BASE_DIR, "deit_thermo_model.pth")
 GENOMIC_REF_DIR = os.path.join(BASE_DIR, "genomic", "refrence")
@@ -43,7 +44,7 @@ logger.info(f"Using device: {device}")
 
 # ====================== MODEL ======================
 logger.info("Loading DeiT model...")
-model = timm.create_model('deit_small_patch16_224', pretrained=False, num_classes=2)
+model = timm.create_model("deit_small_patch16_224", pretrained=False, num_classes=2)
 model.load_state_dict(torch.load(MODEL_PATH, map_location=device))
 model.to(device)
 model.eval()
@@ -52,15 +53,15 @@ logger.info("Model loaded successfully")
 # ====================== IMAGE PREPROCESSING ======================
 from torchvision import transforms
 
-transform = transforms.Compose([
-    transforms.ToPILImage(),
-    transforms.Resize((224, 224)),
-    transforms.ToTensor(),
-    transforms.Normalize(
-        mean=[0.485, 0.456, 0.406],
-        std=[0.229, 0.224, 0.225]
-    )
-])
+transform = transforms.Compose(
+    [
+        transforms.ToPILImage(),
+        transforms.Resize((224, 224)),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+    ]
+)
+
 
 # ====================== GLOBAL STATE ======================
 class AnalysisState:
@@ -92,21 +93,23 @@ class AnalysisState:
         # Separate lock for analysis state
         self.state_lock = threading.Lock()
 
+
 state = AnalysisState()
+
 
 # ====================== THERMAL STREAM CAPTURE ======================
 def capture_thermal_stream():
     """Continuously capture frames from thermal imaging stream.
     This thread is NEVER blocked by inference — it only touches frame_lock briefly.
     Retries indefinitely with exponential backoff if stream fails."""
-    
+
     retry_delay = 2  # Start with 2s retry
     max_retry_delay = 30
     consecutive_failures = 0
 
     while True:
         logger.info(f"Connecting to stream: {STREAM_URL}")
-        
+
         try:
             cap = cv2.VideoCapture(STREAM_URL)
         except Exception as e:
@@ -135,7 +138,9 @@ def capture_thermal_stream():
             if not ret:
                 consecutive_failures += 1
                 if consecutive_failures <= 3 or consecutive_failures % 50 == 0:
-                    logger.warning(f"Frame read failed (#{consecutive_failures}), retrying...")
+                    logger.warning(
+                        f"Frame read failed (#{consecutive_failures}), retrying..."
+                    )
                 if consecutive_failures > 10:
                     # Too many failures — reconnect
                     logger.warning("Too many consecutive failures, reconnecting...")
@@ -164,7 +169,7 @@ def capture_thermal_stream():
             cap.release()
         except:
             pass
-        
+
         logger.info(f"Reconnecting in {retry_delay}s...")
         time.sleep(retry_delay)
 
@@ -181,30 +186,38 @@ def generate_mjpeg():
 
         if frame is not None:
             # Encode as JPEG
-            _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+            _, buffer = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
             frame_bytes = buffer.tobytes()
 
             yield (
-                b'--frame\r\n'
-                b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n'
+                b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + frame_bytes + b"\r\n"
             )
 
         time.sleep(0.033)  # ~30 fps output
 
-@app.route('/video_feed')
+
+@app.route("/video_feed")
 def video_feed():
     """MJPEG video stream — use as <img src="http://localhost:5050/video_feed">"""
     return Response(
-        generate_mjpeg(),
-        mimetype='multipart/x-mixed-replace; boundary=frame'
+        generate_mjpeg(), mimetype="multipart/x-mixed-replace; boundary=frame"
     )
+
 
 def generate_model_input_mjpeg():
     """Generator that yields the model input preview as MJPEG frames.
     Shows the 224x224 preprocessed canvas during analysis."""
     placeholder = np.zeros((224, 224, 3), dtype=np.uint8)
     # Add "WAITING" text to placeholder
-    cv2.putText(placeholder, 'WAITING', (50, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (80, 80, 80), 2)
+    cv2.putText(
+        placeholder,
+        "WAITING",
+        (50, 120),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.8,
+        (80, 80, 80),
+        2,
+    )
 
     while True:
         frame = None
@@ -215,27 +228,27 @@ def generate_model_input_mjpeg():
         if frame is None:
             frame = placeholder
 
-        _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+        _, buffer = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
         frame_bytes = buffer.tobytes()
 
-        yield (
-            b'--frame\r\n'
-            b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n'
-        )
+        yield (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + frame_bytes + b"\r\n")
 
         time.sleep(0.1)  # ~10 fps for model input (updates less frequently)
 
-@app.route('/model_input_feed')
+
+@app.route("/model_input_feed")
 def model_input_feed():
     """MJPEG stream of model input preview — use as <img src="http://localhost:5050/model_input_feed">"""
     return Response(
         generate_model_input_mjpeg(),
-        mimetype='multipart/x-mixed-replace; boundary=frame'
+        mimetype="multipart/x-mixed-replace; boundary=frame",
     )
+
 
 # ====================== FRAME DIMENSIONS ======================
 FW = 320
 FH = 240
+
 
 # ====================== INFERENCE LOOP ======================
 def analyze_frames():
@@ -270,7 +283,7 @@ def analyze_frames():
             frame = cv2.resize(frame, (FW, FH))
 
             # ---- Step 2: Keep lower half (thermal data region) ----
-            thermal_frame = frame[FH // 2:, :]
+            thermal_frame = frame[FH // 2 :, :]
             thermal_frame = cv2.resize(thermal_frame, (FW, FH))
 
             # ---- Step 3: Preprocess ----
@@ -287,7 +300,9 @@ def analyze_frames():
             mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
 
             # ---- Step 6: Find contours ----
-            contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            contours, _ = cv2.findContours(
+                mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+            )
 
             # Default: no foot detected
             status = "NO FOOT"
@@ -313,18 +328,22 @@ def analyze_frames():
                     h = min(FH - y, h + padding * 2)
 
                     # ---- Step 8: Crop foot region ----
-                    foot_crop = thermal_frame[y:y + h, x:x + w]
+                    foot_crop = thermal_frame[y : y + h, x : x + w]
 
                     # ---- Step 9: Create foot mask and isolate ----
                     foot_mask = np.zeros_like(mask)
                     cv2.drawContours(foot_mask, [largest], -1, 255, -1)
-                    foot_mask_crop = foot_mask[y:y + h, x:x + w]
+                    foot_mask_crop = foot_mask[y : y + h, x : x + w]
 
-                    isolated = cv2.bitwise_and(foot_crop, foot_crop, mask=foot_mask_crop)
+                    isolated = cv2.bitwise_and(
+                        foot_crop, foot_crop, mask=foot_mask_crop
+                    )
 
                     # Black background
                     black_bg = np.zeros_like(isolated)
-                    isolated = np.where(isolated > 0, isolated, black_bg).astype(np.uint8)
+                    isolated = np.where(isolated > 0, isolated, black_bg).astype(
+                        np.uint8
+                    )
 
                     # ---- Step 10: Normalize with histogram equalization ----
                     isolated_gray = cv2.cvtColor(isolated, cv2.COLOR_BGR2GRAY)
@@ -337,7 +356,7 @@ def analyze_frames():
                     canvas = np.zeros((224, 224, 3), dtype=np.uint8)
                     resized = cv2.resize(thermal_match, (180, 180))
                     offset = 22
-                    canvas[offset:offset + 180, offset:offset + 180] = resized
+                    canvas[offset : offset + 180, offset : offset + 180] = resized
 
                     model_input = canvas.copy()
 
@@ -370,11 +389,11 @@ def analyze_frames():
 
                     # ---- Step 18: Composite risk score ----
                     risk_score = (
-                        confidence * 35 +
-                        asymmetry_val * 0.4 +
-                        variance_val * 0.08 +
-                        hotspot_area * 0.001 +
-                        edge_val * 0.1
+                        confidence * 35
+                        + asymmetry_val * 0.4
+                        + variance_val * 0.08
+                        + hotspot_area * 0.001
+                        + edge_val * 0.1
                     )
                     risk_score = float(np.clip(risk_score, 0, 100))
 
@@ -383,7 +402,11 @@ def analyze_frames():
                     if elapsed < 3:
                         status = "ANALYZING"
                     else:
-                        avg_conf = float(np.mean(state.confidence_acc)) if state.confidence_acc else confidence
+                        avg_conf = (
+                            float(np.mean(state.confidence_acc))
+                            if state.confidence_acc
+                            else confidence
+                        )
                         if avg_conf < 0.65:
                             status = "UNCERTAIN"
                         elif prediction == 0:
@@ -426,23 +449,27 @@ def analyze_frames():
 def index():
     return {"status": "THERMASCAN running", "stream": STREAM_URL}, 200
 
-@app.route('/status', methods=['GET'])
+
+@app.route("/status", methods=["GET"])
 def get_status():
     """Poll current analysis status."""
     with state.state_lock:
-        return jsonify({
-            'status': state.status,
-            'confidence': round(state.confidence, 4),
-            'risk_score': round(state.risk_score, 1),
-            'asymmetry': round(state.asymmetry, 2),
-            'variance': round(state.variance, 2),
-            'edge_strength': round(state.edge_strength, 2),
-            'fps': round(state.fps, 1),
-            'buffer_length': state.buffer_length,
-            'prediction_history': list(state.prediction_history)
-        })
+        return jsonify(
+            {
+                "status": state.status,
+                "confidence": round(state.confidence, 4),
+                "risk_score": round(state.risk_score, 1),
+                "asymmetry": round(state.asymmetry, 2),
+                "variance": round(state.variance, 2),
+                "edge_strength": round(state.edge_strength, 2),
+                "fps": round(state.fps, 1),
+                "buffer_length": state.buffer_length,
+                "prediction_history": list(state.prediction_history),
+            }
+        )
 
-@app.route('/start_analysis', methods=['POST'])
+
+@app.route("/start_analysis", methods=["POST"])
 def start_analysis():
     """Trigger the 20-second analysis window."""
     with state.state_lock:
@@ -456,47 +483,62 @@ def start_analysis():
         state.edge_strength_acc.clear()
         state.status = "ANALYZING"
         logger.info("Analysis started")
-    return jsonify({'message': 'Analysis started'})
+    return jsonify({"message": "Analysis started"})
 
-@app.route('/stop_analysis', methods=['POST'])
+
+@app.route("/stop_analysis", methods=["POST"])
 def stop_analysis():
     """Stop the analysis window."""
     with state.state_lock:
         state.analysis_active = False
         logger.info("Analysis stopped")
-    return jsonify({'message': 'Analysis stopped'})
+    return jsonify({"message": "Analysis stopped"})
 
-@app.route('/final_result', methods=['GET'])
+
+@app.route("/final_result", methods=["GET"])
 def final_result():
     """Get the averaged analysis result over the full 20s window."""
     with state.state_lock:
         # Average all accumulated values from the analysis window
-        avg_prediction = float(np.mean(list(state.prediction_history))) if state.prediction_history else 0
-        avg_confidence = float(np.mean(state.confidence_acc)) if state.confidence_acc else 0
+        avg_prediction = (
+            float(np.mean(list(state.prediction_history)))
+            if state.prediction_history
+            else 0
+        )
+        avg_confidence = (
+            float(np.mean(state.confidence_acc)) if state.confidence_acc else 0
+        )
         avg_risk = float(np.mean(state.risk_score_acc)) if state.risk_score_acc else 0
-        avg_asymmetry = float(np.mean(state.asymmetry_acc)) if state.asymmetry_acc else 0
+        avg_asymmetry = (
+            float(np.mean(state.asymmetry_acc)) if state.asymmetry_acc else 0
+        )
         avg_variance = float(np.mean(state.variance_acc)) if state.variance_acc else 0
-        avg_edge = float(np.mean(state.edge_strength_acc)) if state.edge_strength_acc else 0
+        avg_edge = (
+            float(np.mean(state.edge_strength_acc)) if state.edge_strength_acc else 0
+        )
 
         final_status = "ULCER RISK" if avg_prediction > 0.5 else "HEALTHY"
 
-        return jsonify({
-            'status': final_status,
-            'confidence': round(avg_confidence, 4),
-            'risk_score': round(avg_risk, 1),
-            'asymmetry': round(avg_asymmetry, 2),
-            'variance': round(avg_variance, 2),
-            'edge_strength': round(avg_edge, 2),
-            'prediction_history': list(state.prediction_history),
-            'total_frames_analyzed': len(state.confidence_acc),
-        })
+        return jsonify(
+            {
+                "status": final_status,
+                "confidence": round(avg_confidence, 4),
+                "risk_score": round(avg_risk, 1),
+                "asymmetry": round(avg_asymmetry, 2),
+                "variance": round(avg_variance, 2),
+                "edge_strength": round(avg_edge, 2),
+                "prediction_history": list(state.prediction_history),
+                "total_frames_analyzed": len(state.confidence_acc),
+            }
+        )
 
-@app.route('/snapshot', methods=['GET'])
+
+@app.route("/snapshot", methods=["GET"])
 def snapshot():
     """Return current thermal frame and model input as base64 images for report embedding."""
-    thermal_b64 = ''
-    model_input_b64 = ''
-    
+    thermal_b64 = ""
+    model_input_b64 = ""
+
     # Grab current live frame
     with state.frame_lock:
         if state.current_frame is not None:
@@ -504,30 +546,39 @@ def snapshot():
             # Apply thermal colormap for better visualization
             gray = cv2.cvtColor(cv2.resize(frame, (FW, FH)), cv2.COLOR_BGR2GRAY)
             thermal_colored = cv2.applyColorMap(gray, cv2.COLORMAP_INFERNO)
-            _, buf = cv2.imencode('.jpg', thermal_colored, [cv2.IMWRITE_JPEG_QUALITY, 90])
-            thermal_b64 = base64.b64encode(buf.tobytes()).decode('utf-8')
-    
+            _, buf = cv2.imencode(
+                ".jpg", thermal_colored, [cv2.IMWRITE_JPEG_QUALITY, 90]
+            )
+            thermal_b64 = base64.b64encode(buf.tobytes()).decode("utf-8")
+
     # Grab model input frame
     with state.state_lock:
         if state.model_input_frame is not None:
-            _, buf = cv2.imencode('.jpg', state.model_input_frame, [cv2.IMWRITE_JPEG_QUALITY, 90])
-            model_input_b64 = base64.b64encode(buf.tobytes()).decode('utf-8')
-    
-    return jsonify({
-        'thermal_frame': thermal_b64,
-        'model_input': model_input_b64,
-    })
+            _, buf = cv2.imencode(
+                ".jpg", state.model_input_frame, [cv2.IMWRITE_JPEG_QUALITY, 90]
+            )
+            model_input_b64 = base64.b64encode(buf.tobytes()).decode("utf-8")
 
-@app.route('/health', methods=['GET'])
+    return jsonify(
+        {
+            "thermal_frame": thermal_b64,
+            "model_input": model_input_b64,
+        }
+    )
+
+
+@app.route("/health", methods=["GET"])
 def health():
     """Health check."""
-    return jsonify({'status': 'ok', 'timestamp': datetime.now().isoformat()})
+    return jsonify({"status": "ok", "timestamp": datetime.now().isoformat()})
+
 
 # ====================== MAIN ======================
-if __name__ == '__main__':
+if __name__ == "__main__":
     # Initialize Genomic API (Flask routes on :5050 — legacy)
     try:
         from genomic import create_genomic_api
+
         create_genomic_api(app)
         logger.info("✓ Genomic analysis API initialized at /api/genomic/*")
     except ImportError as e:
@@ -539,6 +590,7 @@ if __name__ == '__main__':
     def start_genomic_server():
         """Launch the De Bruijn genomic analysis FastAPI server on port 5051."""
         import socket
+
         GENOMIC_PORT = 5051
         MAX_RETRIES = 3
 
@@ -547,19 +599,26 @@ if __name__ == '__main__':
             try:
                 test_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 test_sock.settimeout(1)
-                result = test_sock.connect_ex(('127.0.0.1', GENOMIC_PORT))
+                result = test_sock.connect_ex(("127.0.0.1", GENOMIC_PORT))
                 test_sock.close()
                 if result == 0:
                     # Port is in use — try to free it
-                    logger.warning(f"Port {GENOMIC_PORT} in use, attempting to free (attempt {attempt+1}/{MAX_RETRIES})...")
+                    logger.warning(
+                        f"Port {GENOMIC_PORT} in use, attempting to free (attempt {attempt + 1}/{MAX_RETRIES})..."
+                    )
                     import subprocess
+
                     subprocess.run(
-                        ['powershell', '-Command',
-                         f"Get-NetTCPConnection -LocalPort {GENOMIC_PORT} -ErrorAction SilentlyContinue | "
-                         f"Select-Object -ExpandProperty OwningProcess -Unique | "
-                         f"Where-Object {{ $_ -ne 0 }} | "
-                         f"ForEach-Object {{ Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue }}"],
-                        capture_output=True, timeout=5
+                        [
+                            "powershell",
+                            "-Command",
+                            f"Get-NetTCPConnection -LocalPort {GENOMIC_PORT} -ErrorAction SilentlyContinue | "
+                            f"Select-Object -ExpandProperty OwningProcess -Unique | "
+                            f"Where-Object {{ $_ -ne 0 }} | "
+                            f"ForEach-Object {{ Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue }}",
+                        ],
+                        capture_output=True,
+                        timeout=5,
                     )
                     time.sleep(2)
             except Exception:
@@ -568,24 +627,35 @@ if __name__ == '__main__':
             try:
                 import uvicorn
                 from genomic_server import app as genomic_app
-                logger.info(f"✓ Starting FastAPI genomic server on port {GENOMIC_PORT}...")
-                uvicorn.run(genomic_app, host="0.0.0.0", port=GENOMIC_PORT, log_level="info")
+
+                logger.info(
+                    f"✓ Starting FastAPI genomic server on port {GENOMIC_PORT}..."
+                )
+                uvicorn.run(
+                    genomic_app, host="0.0.0.0", port=GENOMIC_PORT, log_level="info"
+                )
                 return  # Server exited normally
             except OSError as e:
                 if "10048" in str(e) or "address already in use" in str(e).lower():
-                    logger.warning(f"Port {GENOMIC_PORT} still in use, retrying in 3s...")
+                    logger.warning(
+                        f"Port {GENOMIC_PORT} still in use, retrying in 3s..."
+                    )
                     time.sleep(3)
                 else:
                     logger.error(f"✗ Genomic server error: {e}")
                     return
             except ImportError as e:
-                logger.warning(f"⚠ Could not start genomic server (missing dependency): {e}")
+                logger.warning(
+                    f"⚠ Could not start genomic server (missing dependency): {e}"
+                )
                 return
             except Exception as e:
                 logger.error(f"✗ Failed to start genomic server: {e}")
                 return
 
-        logger.error(f"✗ Could not start genomic server after {MAX_RETRIES} attempts — port {GENOMIC_PORT} is locked.")
+        logger.error(
+            f"✗ Could not start genomic server after {MAX_RETRIES} attempts — port {GENOMIC_PORT} is locked."
+        )
 
     genomic_thread = threading.Thread(target=start_genomic_server, daemon=True)
     genomic_thread.start()
@@ -601,8 +671,9 @@ if __name__ == '__main__':
     logger.info(f"Starting THERMASCAN inference server on port {PORT}")
     logger.info(f"Available endpoints:")
     logger.info(f"  Thermal imaging: http://localhost:{PORT}/status")
-    logger.info(f"  Genomic analysis (Flask): http://localhost:{PORT}/api/genomic/health")
+    logger.info(
+        f"  Genomic analysis (Flask): http://localhost:{PORT}/api/genomic/health"
+    )
     logger.info(f"  Genomic analysis (FastAPI): http://localhost:5051/health")
     # Use threaded=True for MJPEG streaming support
-    app.run(host='0.0.0.0', port=PORT, debug=False, threaded=True)
-
+    app.run(host="0.0.0.0", port=PORT, debug=False, threaded=True)
