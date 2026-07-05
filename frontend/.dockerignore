@@ -1,0 +1,7 @@
+# Ignore local node packages and build output
+node_modules/
+dist/
+build/
+.env
+.env.local
+.env.*.local

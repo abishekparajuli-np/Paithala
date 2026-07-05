@@ -6,6 +6,7 @@ import { useAuth } from '../context/AuthContext';
 import toast from 'react-hot-toast';
 import StatusBadge from '../components/StatusBadge';
 import { genomicApi } from '../utils/genomicApi';
+import { inferenceApi } from '../utils/inferenceApi';
 
 const safeNum = (val, fb = 0) => { const n = Number(val); return isNaN(n) ? fb : n; };
 
@@ -26,6 +27,7 @@ export default function DashboardPage() {
   const [showPatients, setShowPatients] = useState(false);
   const [search, setSearch] = useState('');
   const [genomicServerOk, setGenomicServerOk] = useState(false);
+  const [inferenceServerOk, setInferenceServerOk] = useState(false);
 
   // Check genomic server health
   useEffect(() => {
@@ -39,6 +41,21 @@ export default function DashboardPage() {
     };
     checkGenomicHealth();
     const interval = setInterval(checkGenomicHealth, 10000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // Check inference server health
+  useEffect(() => {
+    const checkInferenceHealth = async () => {
+      try {
+        const res = await inferenceApi.healthCheck();
+        setInferenceServerOk(res.status === 200);
+      } catch {
+        setInferenceServerOk(false);
+      }
+    };
+    checkInferenceHealth();
+    const interval = setInterval(checkInferenceHealth, 10000);
     return () => clearInterval(interval);
   }, []);
 
@@ -266,7 +283,7 @@ export default function DashboardPage() {
                 {[
                   { label: 'Database',        ok: true  },
                   { label: 'Auth service',     ok: true  },
-                  { label: 'Inference server', ok: false },
+                  { label: 'Inference server', ok: inferenceServerOk },
                   { label: 'Genomic server',   ok: genomicServerOk },
                 ].map(({ label, ok }) => (
                   <div key={label} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>

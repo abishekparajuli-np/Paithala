@@ -15,7 +15,6 @@ from .fasta_loader import FastaLoader, SequenceAnalyzer
 from .analysis_engine import GenomicAnalysisEngine
 from .debruijn_engine import DeBruijnGraph, FastqParser
 from .risk_scorer import GenomicRiskScorer
-from .api import create_genomic_api
 
 __all__ = [
     'FastaLoader',
@@ -24,5 +23,4 @@ __all__ = [
     'DeBruijnGraph',
     'FastqParser',
     'GenomicRiskScorer',
-    'create_genomic_api',
 ]

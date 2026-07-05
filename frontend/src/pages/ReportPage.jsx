@@ -96,7 +96,7 @@ export default function ReportPage() {
     loadData();
   }, [scanId, navigate]);
 
-  const generatePDF = () => {
+  const generatePDF = async () => {
     try {
       const pdf = new jsPDF({ unit: 'mm', format: 'a4' });
       const PW = pdf.internal.pageSize.getWidth();
@@ -128,17 +128,33 @@ export default function ReportPage() {
           pdf.addPage(); y = 18;
           pdf.setFillColor(6, 16, 32); pdf.rect(0, 0, PW, 10, 'F');
           setFont(7, 'normal', 16, 185, 129);
-          pdf.text('THERMASCAN AI  —  Continued', ML, 6.5);
+          pdf.text('PAITHALA  —  Continued', ML, 6.5);
           hLine(10, 0.1);
         }
       };
 
+      // Load logo
+      const logoImg = new Image();
+      logoImg.src = '/logo2.png'; // Primary logo
+      let logoLoaded = false;
+      await new Promise((resolve) => {
+        logoImg.onload = () => { logoLoaded = true; resolve(); };
+        logoImg.onerror = resolve;
+      });
+
       // Header bar
       pdf.setFillColor(6, 16, 32); pdf.rect(0, 0, PW, 28, 'F');
       pdf.setFillColor(16, 185, 129); pdf.rect(0, 0, PW, 0.8, 'F');
-      setFont(18, 'bold', 16, 185, 129); pdf.text('THERMASCAN AI', ML, 13);
-      setFont(8, 'normal', 148, 163, 184); pdf.text('Diabetic Foot Ulcer Risk Assessment', ML, 19);
-      setFont(7, 'normal', 100, 116, 139); pdf.text('CLINICAL REPORT  ·  CONFIDENTIAL', ML, 24.5);
+      
+      let textOffset = ML;
+      if (logoLoaded) {
+        pdf.addImage(logoImg, 'PNG', ML, 5, 15, 15);
+        textOffset = ML + 18;
+      }
+      
+      setFont(18, 'bold', 16, 185, 129); pdf.text('PAITHALA', textOffset, 13);
+      setFont(8, 'normal', 148, 163, 184); pdf.text('Diabetic Foot Ulcer Risk Assessment', textOffset, 19);
+      setFont(7, 'normal', 100, 116, 139); pdf.text('CLINICAL REPORT  ·  CONFIDENTIAL', textOffset, 24.5);
       const rDate = new Date().toLocaleString('en-US', { dateStyle: 'long', timeStyle: 'short' });
       setFont(7, 'normal', 100, 116, 139);
       pdf.text('Report ID:', MR - 60, 13);
@@ -342,11 +358,11 @@ export default function ReportPage() {
     setSubmitting(true);
 
     try {
-      // 1. Generate PDF (instant — pure JS, no network)
-      const pdf = generatePDF();
+      // 1. Generate PDF (await because we need to load the logo)
+      const pdf = await generatePDF();
 
       // 2. Download PDF locally (instant — triggers browser download)
-      pdf.save(`THERMASCAN_Report_${scanId}.pdf`);
+      pdf.save(`Paithala_Report_${scanId}.pdf`);
 
       // 3. Save report metadata to Firestore (fast — small document)
       const reportData = {

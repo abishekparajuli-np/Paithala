@@ -1,9 +1,7 @@
-"""
-Firebase Security Rules for THERMASCAN AI
-
-Deploy with:
-  firebase deploy --only firestore:rules
-"""
+// Firebase Security Rules for Paithala
+//
+// Deploy with:
+//   firebase deploy --only firestore:rules --project ulcer-thermography
 
 rules_version = '2';
 
@@ -14,42 +12,38 @@ service cloud.firestore {
       return request.auth != null;
     }
 
-    function isDoctor() {
-      return isAuthenticated() && 
-             get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'doctor';
-    }
-
     function isOwnData() {
       return resource.data.doctorId == request.auth.uid;
     }
 
-    // Users collection
+    // Users collection — authenticated users can read/create their own doc
     match /users/{userId} {
-      allow read: if isAuthenticated() && (userId == request.auth.uid || isDoctor());
-      allow write: if false; // Only admin can create users
+      allow read: if isAuthenticated() && userId == request.auth.uid;
+      allow create: if isAuthenticated() && userId == request.auth.uid;
+      allow update, delete: if false;
     }
 
     // Patients collection
     match /patients/{patientId} {
-      allow read: if isDoctor() && resource.data.doctorId == request.auth.uid;
-      allow create: if isDoctor() && request.resource.data.doctorId == request.auth.uid;
-      allow update: if isDoctor() && resource.data.doctorId == request.auth.uid;
-      allow delete: if false; // Prevent deletion for audit trail
+      allow read: if isAuthenticated() && resource.data.doctorId == request.auth.uid;
+      allow create: if isAuthenticated() && request.resource.data.doctorId == request.auth.uid;
+      allow update: if isAuthenticated() && resource.data.doctorId == request.auth.uid;
+      allow delete: if false;
     }
 
     // Scans collection
     match /scans/{scanId} {
-      allow read: if isDoctor() && resource.data.doctorId == request.auth.uid;
-      allow create: if isDoctor() && request.resource.data.doctorId == request.auth.uid;
-      allow update: if isDoctor() && resource.data.doctorId == request.auth.uid;
+      allow read: if isAuthenticated() && resource.data.doctorId == request.auth.uid;
+      allow create: if isAuthenticated() && request.resource.data.doctorId == request.auth.uid;
+      allow update: if isAuthenticated() && resource.data.doctorId == request.auth.uid;
       allow delete: if false;
     }
 
     // Reports collection
     match /reports/{reportId} {
-      allow read: if isDoctor() && resource.data.doctorId == request.auth.uid;
-      allow create: if isDoctor() && request.resource.data.doctorId == request.auth.uid;
-      allow update: if isDoctor() && resource.data.doctorId == request.auth.uid;
+      allow read: if isAuthenticated() && resource.data.doctorId == request.auth.uid;
+      allow create: if isAuthenticated() && request.resource.data.doctorId == request.auth.uid;
+      allow update: if isAuthenticated() && resource.data.doctorId == request.auth.uid;
       allow delete: if false;
     }
 

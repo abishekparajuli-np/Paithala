@@ -20,6 +20,22 @@ services:
       timeout: 10s
       retries: 3
 
+  genomic:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: ["uvicorn", "genomic_server:app", "--host", "0.0.0.0", "--port", "5051"]
+    ports:
+      - "5051:5051"
+    environment:
+      - FLASK_ENV=production
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5051/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
   frontend:
     build:
       context: ./frontend
@@ -40,4 +56,4 @@ services:
 
 networks:
   default:
-    name: thermascan-network
+    name: paithala-network

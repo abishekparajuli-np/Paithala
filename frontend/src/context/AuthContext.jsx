@@ -48,11 +48,16 @@ export const AuthProvider = ({ children }) => {
               }
             }
           } catch (firestoreErr) {
-            // Firestore unavailable (database not created, network error, etc.)
-            // Fail-open: trust Firebase Auth authentication
-            console.warn(
-              '⚠️ Firestore role check failed (database may not be set up yet).\n' +
-              'Allowing authenticated user through. Error:', firestoreErr.message
+            // Firestore unavailable — common causes:
+            //   • Security rules haven't been deployed yet
+            //   • Firestore database hasn't been created in the project
+            //   • Network/permissions issue
+            // Fail-open: trust Firebase Auth; actual data-level security
+            // is enforced by Firestore rules on each collection, not here.
+            console.debug(
+              '[AuthContext] Firestore role check skipped:', firestoreErr.message,
+              '\nThis is expected if Firestore rules are not yet deployed.',
+              '\nTo deploy: firebase deploy --only firestore:rules --project ulcer-thermography'
             );
             setCurrentUser(user);
             setUserRole('doctor');

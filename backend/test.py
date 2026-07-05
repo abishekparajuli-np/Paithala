@@ -1,8 +1,13 @@
 """
-Paithala — Python Inference Server
+Paithala — Python Inference Server (WEBCAM TEST VERSION)
+
 Exposes DeiT ViT model via REST API for real-time thermal imaging analysis.
 Includes genomic analysis capabilities for diabetic foot ulcer risk assessment.
 Video stream delivered via MJPEG over HTTP.
+
+TESTING MODE: Uses local laptop webcam instead of external thermal stream.
+Everything else is functionally identical to the production server.
+
 Runs on http://localhost:5050
 """
 
@@ -11,6 +16,7 @@ import logging
 import os
 import threading
 import time
+import traceback
 from collections import deque
 from datetime import datetime
 
@@ -22,11 +28,27 @@ from flask import Flask, Response, jsonify
 from flask_cors import CORS
 
 # ====================== CONFIG ======================
-# STREAM_URL = "http://10.238.147.134:5000/video_feed"
-STREAM_URL = "http://10.238.147.134:5000/video_feed"
+# --- WEBCAM TEST MODE ---
+# Original external stream (kept here for quick swap-back):
+# STREAM_URL = "https://192.168.9:8080/video"
+#
+# For testing, we use the local webcam. On most laptops index 0 is the
+# built-in camera. If you have multiple cameras, try 1, 2, etc.
+WEBCAM_INDEX = 0
+STREAM_URL = WEBCAM_INDEX  # cv2.VideoCapture accepts an int index or a URL string
+
+# When True, skip the thermal-specific adaptive-threshold/contour foot
+# detection and just treat the entire frame as the "foot region." This is
+# ONLY for validating the plumbing (preview feed, inference call, metrics)
+# with a regular webcam, since a real thermal foot image segments very
+# differently than an RGB face against a wall. Set False for real thermal
+# input where contour-based foot isolation should actually run.
+WEBCAM_TEST_BYPASS_DETECTION = True
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 MODEL_PATH = os.path.join(BASE_DIR, "deit_thermo_model.pth")
 GENOMIC_REF_DIR = os.path.join(BASE_DIR, "genomic", "refrence")
+
 ANALYSIS_WINDOW = 20  # seconds
 BUFFER_SIZE = 60
 PORT = 5050
@@ -83,12 +105,14 @@ class AnalysisState:
         self.current_frame = None
         self.model_input_frame = None
         self.bounding_box = None
+
         # Accumulators for averaging over the 20s window
         self.confidence_acc = []
         self.risk_score_acc = []
         self.asymmetry_acc = []
         self.variance_acc = []
         self.edge_strength_acc = []
+
         # Lock for frame read/write only (kept very brief)
         self.frame_lock = threading.Lock()
         # Separate lock for analysis state
@@ -98,20 +122,22 @@ class AnalysisState:
 state = AnalysisState()
 
 
-# ====================== THERMAL STREAM CAPTURE ======================
+# ====================== WEBCAM CAPTURE ======================
 def capture_thermal_stream():
-    """Continuously capture frames from thermal imaging stream.
-    This thread is NEVER blocked by inference — it only touches frame_lock briefly.
-    Retries indefinitely with exponential backoff if stream fails."""
+    """Continuously capture frames from the local webcam (test substitute
+    for the external thermal imaging stream).
 
+    This thread is NEVER blocked by inference — it only touches frame_lock briefly.
+    Retries indefinitely with exponential backoff if the camera fails."""
     retry_delay = 2  # Start with 2s retry
     max_retry_delay = 30
     consecutive_failures = 0
 
     while True:
-        logger.info(f"Connecting to stream: {STREAM_URL}")
-
+        logger.info(f"Opening webcam (index {STREAM_URL})...")
         try:
+            # On Windows, cv2.CAP_DSHOW often opens faster/more reliably.
+            # Fall back to default backend if that fails.
             cap = cv2.VideoCapture(STREAM_URL)
         except Exception as e:
             logger.error(f"Failed to create VideoCapture: {e}")
@@ -120,12 +146,16 @@ def capture_thermal_stream():
             continue
 
         if not cap.isOpened():
-            logger.warning(f"Failed to open stream, retrying in {retry_delay}s...")
+            logger.warning(f"Failed to open webcam, retrying in {retry_delay}s...")
             time.sleep(retry_delay)
             retry_delay = min(retry_delay * 2, max_retry_delay)
             continue
 
-        logger.info("Stream connected successfully")
+        # Optional: request a reasonable resolution from the webcam.
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+
+        logger.info("Webcam connected successfully")
         retry_delay = 2  # Reset backoff on successful connection
         consecutive_failures = 0
 
@@ -170,7 +200,6 @@ def capture_thermal_stream():
             cap.release()
         except:
             pass
-
         logger.info(f"Reconnecting in {retry_delay}s...")
         time.sleep(retry_delay)
 
@@ -189,11 +218,9 @@ def generate_mjpeg():
             # Encode as JPEG
             _, buffer = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
             frame_bytes = buffer.tobytes()
-
             yield (
                 b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + frame_bytes + b"\r\n"
             )
-
         time.sleep(0.033)  # ~30 fps output
 
 
@@ -232,9 +259,7 @@ def generate_model_input_mjpeg():
         frame_large = cv2.resize(frame, (448, 448), interpolation=cv2.INTER_NEAREST)
         _, buffer = cv2.imencode(".jpg", frame_large, [cv2.IMWRITE_JPEG_QUALITY, 85])
         frame_bytes = buffer.tobytes()
-
         yield (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + frame_bytes + b"\r\n")
-
         time.sleep(0.1)  # ~10 fps for model input (updates less frequently)
 
 
@@ -255,6 +280,7 @@ FH = 240
 # ====================== INFERENCE LOOP ======================
 def analyze_frames():
     """Continuously analyze frames during the 20s analysis window.
+
     Uses the full preprocessing pipeline from test.py:
     - Lower half crop (thermal data region)
     - Adaptive thresholding
@@ -263,7 +289,16 @@ def analyze_frames():
     - Histogram equalization
     - COLORMAP_OCEAN to match training style
     - Centered on 224x224 canvas
-    All heavy computation runs OUTSIDE any lock."""
+
+    All heavy computation runs OUTSIDE any lock.
+
+    NOTE (webcam test mode): since a regular webcam sees visible light,
+    not thermal IR, the "hotspot"/thresholding logic will behave very
+    differently than on a real thermal camera. This is expected — the
+    point of this test harness is to validate plumbing (capture, MJPEG
+    streams, endpoints, inference call), not to produce clinically
+    meaningful results from webcam footage.
+    """
     while True:
         if not state.analysis_active:
             time.sleep(0.1)
@@ -317,12 +352,29 @@ def analyze_frames():
             edge_val = 0.0
             prediction = 0
             model_input = None
+            bbox = None
 
-            if len(contours) > 0:
+            # FIX (webcam test mode): the adaptive-threshold + contour logic
+            # below is tuned for a thermal image (bright foot blob on a dark
+            # background) and generally will NOT find a contour with
+            # area > 500 in a normally-lit RGB face/webcam frame — which is
+            # why `model_input_frame` was never being set and the preview
+            # stayed on "WAITING" even after the exception-swallowing bug
+            # was fixed. When WEBCAM_TEST_BYPASS_DETECTION is on, skip
+            # straight to using the whole frame as the "foot region" so you
+            # can validate the preview/inference plumbing.
+            found_region = False
+            if WEBCAM_TEST_BYPASS_DETECTION:
+                x, y, w, h = 0, 0, FW, FH
+                largest = np.array(
+                    [[[0, 0]], [[FW - 1, 0]], [[FW - 1, FH - 1]], [[0, FH - 1]]]
+                )
+                found_region = True
+            elif len(contours) > 0:
                 largest = max(contours, key=cv2.contourArea)
                 area = cv2.contourArea(largest)
 
-                if area > 500: # Lowered from 3000 to allow webcam testing
+                if area > 500:
                     # ---- Step 7: Padded bounding box ----
                     x, y, w, h = cv2.boundingRect(largest)
                     padding = 20
@@ -330,93 +382,120 @@ def analyze_frames():
                     y = max(0, y - padding)
                     w = min(FW - x, w + padding * 2)
                     h = min(FH - y, h + padding * 2)
+                    found_region = True
 
-                    # ---- Step 8: Crop foot region ----
-                    foot_crop = thermal_frame[y : y + h, x : x + w]
+            if found_region:
+                if True:
+                    # FIX: guard against a degenerate/empty bounding box.
+                    # Without this, foot_crop / foot_mask_crop can end up
+                    # zero-sized, which throws inside cv2.equalizeHist /
+                    # cv2.cvtColor further down. That silent exception was
+                    # the reason the model input, confidence, buffer, etc.
+                    # never updated in the UI.
+                    if w > 0 and h > 0:
+                        # ---- Step 8: Crop foot region ----
+                        foot_crop = thermal_frame[y : y + h, x : x + w]
 
-                    # ---- Step 9: Create foot mask ----
-                    foot_mask = np.zeros_like(mask)
-                    cv2.drawContours(foot_mask, [largest], -1, 255, -1)
-                    foot_mask_crop = foot_mask[y : y + h, x : x + w]
+                        # ---- Step 9: Create foot mask ----
+                        foot_mask = np.zeros_like(mask)
+                        cv2.drawContours(foot_mask, [largest], -1, 255, -1)
+                        foot_mask_crop = foot_mask[y : y + h, x : x + w]
 
-                    # ---- Step 10: Normalize with histogram equalization BEFORE masking ----
-                    foot_crop_gray = cv2.cvtColor(foot_crop, cv2.COLOR_BGR2GRAY)
-                    foot_crop_eq = cv2.equalizeHist(foot_crop_gray)
+                        # FIX: also guard against empty crops (can happen
+                        # if the contour touches the frame edge in odd ways).
+                        if foot_crop.size > 0 and foot_mask_crop.size > 0:
+                            # ---- Step 10: Normalize with histogram equalization BEFORE masking ----
+                            foot_crop_gray = cv2.cvtColor(foot_crop, cv2.COLOR_BGR2GRAY)
+                            foot_crop_eq = cv2.equalizeHist(foot_crop_gray)
 
-                    # ---- Step 11: Match training style with COLORMAP_INFERNO and isolate ----
-                    thermal_match = cv2.applyColorMap(foot_crop_eq, cv2.COLORMAP_INFERNO)
-                    thermal_match = cv2.bitwise_and(thermal_match, thermal_match, mask=foot_mask_crop)
-                    
-                    # For later analysis
-                    isolated_gray = cv2.bitwise_and(foot_crop_eq, foot_crop_eq, mask=foot_mask_crop)
+                            # ---- Step 11: Match training style with COLORMAP_INFERNO and isolate ----
+                            thermal_match = cv2.applyColorMap(
+                                foot_crop_eq, cv2.COLORMAP_INFERNO
+                            )
+                            thermal_match = cv2.bitwise_and(
+                                thermal_match, thermal_match, mask=foot_mask_crop
+                            )
 
-                    # ---- Step 12: Center foot on 224x224 black canvas ----
-                    canvas = np.zeros((224, 224, 3), dtype=np.uint8)
-                    resized = cv2.resize(thermal_match, (180, 180))
-                    offset = 22
-                    canvas[offset : offset + 180, offset : offset + 180] = resized
+                            # For later analysis
+                            isolated_gray = cv2.bitwise_and(
+                                foot_crop_eq, foot_crop_eq, mask=foot_mask_crop
+                            )
 
-                    model_input = canvas.copy()
+                            # ---- Step 12: Center foot on 224x224 black canvas ----
+                            canvas = np.zeros((224, 224, 3), dtype=np.uint8)
+                            resized = cv2.resize(thermal_match, (180, 180))
+                            offset = 22
+                            canvas[offset : offset + 180, offset : offset + 180] = (
+                                resized
+                            )
+                            model_input = canvas.copy()
+                            bbox = (x, y, w, h)
 
-                    # ---- Step 13: AI Inference ----
-                    rgb = cv2.cvtColor(canvas, cv2.COLOR_BGR2RGB)
-                    img_tensor = transform(rgb).unsqueeze(0).to(device)
+                            # ---- Step 13: AI Inference ----
+                            rgb = cv2.cvtColor(canvas, cv2.COLOR_BGR2RGB)
+                            img_tensor = transform(rgb).unsqueeze(0).to(device)
+                            with torch.no_grad():
+                                output = model(img_tensor)
+                                probs = torch.softmax(output, dim=1)
+                                confidence = torch.max(probs).item()
+                                prediction = torch.argmax(output, dim=1).item()
 
-                    with torch.no_grad():
-                        output = model(img_tensor)
-                        probs = torch.softmax(output, dim=1)
-                        confidence = torch.max(probs).item()
-                        prediction = torch.argmax(output, dim=1).item()
+                            # ---- Step 14: Hotspot analysis ----
+                            hotspot = isolated_gray > (np.mean(isolated_gray) + 25)
+                            hotspot_area = float(np.sum(hotspot))
 
-                    # ---- Step 14: Hotspot analysis ----
-                    hotspot = isolated_gray > (np.mean(isolated_gray) + 25)
-                    hotspot_area = float(np.sum(hotspot))
+                            # ---- Step 15: Asymmetry (left vs right half) ----
+                            mid = isolated_gray.shape[1] // 2
+                            left_half = isolated_gray[:, :mid]
+                            right_half = isolated_gray[:, mid:]
+                            asymmetry_val = float(
+                                abs(np.mean(left_half) - np.mean(right_half))
+                            )
 
-                    # ---- Step 15: Asymmetry (left vs right half) ----
-                    mid = isolated_gray.shape[1] // 2
-                    left_half = isolated_gray[:, :mid]
-                    right_half = isolated_gray[:, mid:]
-                    asymmetry_val = float(abs(np.mean(left_half) - np.mean(right_half)))
+                            # ---- Step 16: Variance ----
+                            variance_val = float(np.var(isolated_gray))
 
-                    # ---- Step 16: Variance ----
-                    variance_val = float(np.var(isolated_gray))
+                            # ---- Step 17: Edge strength ----
+                            edges = cv2.Canny(isolated_gray, 50, 150)
+                            edge_val = float(np.mean(edges))
 
-                    # ---- Step 17: Edge strength ----
-                    edges = cv2.Canny(isolated_gray, 50, 150)
-                    edge_val = float(np.mean(edges))
+                            # ---- Step 18: Composite risk score ----
+                            risk_score = (
+                                confidence * 35
+                                + asymmetry_val * 0.4
+                                + variance_val * 0.08
+                                + hotspot_area * 0.001
+                                + edge_val * 0.1
+                            )
+                            risk_score = float(np.clip(risk_score, 0, 100))
 
-                    # ---- Step 18: Composite risk score ----
-                    risk_score = (
-                        confidence * 35
-                        + asymmetry_val * 0.4
-                        + variance_val * 0.08
-                        + hotspot_area * 0.001
-                        + edge_val * 0.1
-                    )
-                    risk_score = float(np.clip(risk_score, 0, 100))
+                            # ---- Step 19: Temporal stabilization ----
+                            elapsed = time.time() - (
+                                state.analysis_start_time or time.time()
+                            )
+                            if elapsed < 3:
+                                status = "ANALYZING"
+                            else:
+                                avg_conf = (
+                                    float(np.mean(state.confidence_acc))
+                                    if state.confidence_acc
+                                    else confidence
+                                )
+                                if avg_conf < 0.65:
+                                    status = "UNCERTAIN"
+                                elif prediction == 0:
+                                    status = "HEALTHY"
+                                else:
+                                    status = "ULCER RISK"
 
-                    # ---- Step 19: Temporal stabilization ----
-                    elapsed = time.time() - (state.analysis_start_time or time.time())
-                    if elapsed < 3:
-                        status = "ANALYZING"
-                    else:
-                        avg_conf = (
-                            float(np.mean(state.confidence_acc))
-                            if state.confidence_acc
-                            else confidence
-                        )
-                        if avg_conf < 0.65:
-                            status = "UNCERTAIN"
-                        elif prediction == 0:
-                            status = "HEALTHY"
-                        else:
-                            status = "ULCER RISK"
-
-            # Write results — brief state lock
+            # Write results — brief state lock.
+            # This now ALWAYS runs on a successful pass through the try block,
+            # even when no foot/contour was found, so buffer_length and the
+            # rest of the UI keep advancing instead of freezing at 0.
             with state.state_lock:
                 if model_input is not None:
                     state.model_input_frame = model_input
-                    state.bounding_box = (x, y, w, h)
+                    state.bounding_box = bbox
                 state.confidence = confidence
                 state.prediction_history.append(prediction)
                 state.buffer_length = len(state.prediction_history)
@@ -433,8 +512,15 @@ def analyze_frames():
                 state.variance_acc.append(variance_val)
                 state.edge_strength_acc.append(edge_val)
 
-        except Exception as e:
-            logger.error(f"Analysis error: {e}")
+        except Exception:
+            # FIX: log the FULL traceback instead of just the exception
+            # message. Previously this handler only reset status back to
+            # "ANALYZING" and logged a one-line message, so it silently
+            # swallowed whatever was breaking the pipeline every frame,
+            # and none of the result fields (confidence, buffer_length,
+            # model_input_frame, etc.) were ever written — which is why
+            # the dashboard was stuck at 0.00 / 0 / WAITING.
+            logger.error("Analysis error:\n" + traceback.format_exc())
             with state.state_lock:
                 state.status = "ANALYZING"
 
@@ -445,7 +531,10 @@ def analyze_frames():
 # ====================== REST ENDPOINTS ======================
 @app.route("/")
 def index():
-    return {"status": "Paithala running", "stream": STREAM_URL}, 200
+    return {
+        "status": "Paithala running (WEBCAM TEST MODE)",
+        "stream": f"webcam index {STREAM_URL}",
+    }, 200
 
 
 @app.route("/status", methods=["GET"])
@@ -533,7 +622,7 @@ def final_result():
 
 @app.route("/snapshot", methods=["GET"])
 def snapshot():
-    """Return current thermal frame and model input as base64 images for report embedding."""
+    """Return current frame and model input as base64 images for report embedding."""
     thermal_b64 = ""
     model_input_b64 = ""
 
@@ -573,7 +662,7 @@ def health():
 
 # ====================== MAIN ======================
 if __name__ == "__main__":
-    # Start capture thread
+    # Start capture thread (webcam)
     capture_thread = threading.Thread(target=capture_thermal_stream, daemon=True)
     capture_thread.start()
 
@@ -581,12 +670,13 @@ if __name__ == "__main__":
     analysis_thread = threading.Thread(target=analyze_frames, daemon=True)
     analysis_thread.start()
 
-    logger.info(f"Starting Paithala inference server on port {PORT}")
+    logger.info(f"Starting Paithala inference server (WEBCAM TEST MODE) on port {PORT}")
     logger.info(f"Available endpoints:")
     logger.info(f"  Thermal imaging: http://localhost:{PORT}/status")
     logger.info(
         f"  Genomic analysis (Flask): http://localhost:{PORT}/api/genomic/health"
     )
     logger.info(f"  Genomic analysis (FastAPI): http://localhost:5051/health")
+
     # Use threaded=True for MJPEG streaming support
     app.run(host="0.0.0.0", port=PORT, debug=False, threaded=True)
