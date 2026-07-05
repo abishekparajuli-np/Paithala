@@ -1,11 +1,11 @@
 @echo off
-REM Setup script for THERMASCAN AI (Windows)
+REM Setup script for Paithala (Windows)
 
 setlocal enabledelayedexpansion
 
 echo.
-echo 🏥 THERMASCAN AI - Setup Script (Windows)
-echo ==========================================
+echo 🏥 Paithala - Setup Script (Windows)
+echo ====================================
 echo.
 
 REM Check prerequisites

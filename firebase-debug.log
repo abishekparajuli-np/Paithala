@@ -1,0 +1,29 @@
+[debug] [2026-07-02T15:58:22.363Z] ----------------------------------------------------------------------
+[debug] [2026-07-02T15:58:22.364Z] Command:       /usr/bin/node /home/abishek/.npm/_npx/7750544ccf494d8b/node_modules/.bin/firebase login --no-localhost
+[debug] [2026-07-02T15:58:22.364Z] CLI Version:   15.22.4
+[debug] [2026-07-02T15:58:22.364Z] Platform:      linux
+[debug] [2026-07-02T15:58:22.364Z] Node Version:  v26.4.0
+[debug] [2026-07-02T15:58:22.364Z] Detected Agent: antigravity
+[debug] [2026-07-02T15:58:22.364Z] Time:          Thu Jul 02 2026 21:43:22 GMT+0545 (Nepal Time)
+[debug] [2026-07-02T15:58:22.364Z] ----------------------------------------------------------------------
+[debug] 
+[info] i  The Firebase CLI’s MCP server feature can optionally make use of Gemini in Firebase. Learn more about Gemini in Firebase and how it uses your data: https://firebase.google.com/docs/gemini-in-firebase#how-gemini-in-firebase-uses-your-data 
+[info] 
+[info] i  Firebase optionally collects CLI and Emulator Suite usage and error reporting information to help improve our products. Data is collected in accordance with Google's privacy policy (https://policies.google.com/privacy) and is not used to identify you. 
+[debug] [2026-07-02T16:00:03.970Z] >>> [apiv2][query] POST https://auth.firebase.tools/attest [none]
+[debug] [2026-07-02T16:00:03.970Z] >>> [apiv2][body] POST https://auth.firebase.tools/attest {"session_id":"c0c0722d-112c-4bb8-b78e-e23dd4832b0f"}
+[debug] [2026-07-02T16:00:05.380Z] <<< [apiv2][status] POST https://auth.firebase.tools/attest 200
+[debug] [2026-07-02T16:00:05.380Z] <<< [apiv2][body] POST https://auth.firebase.tools/attest {"token":"6MptoFrCLmxSSBksLd3Pgzjr13hUpcsNcMU4wPf3eo8"}
+[info] 
+[info] To sign in to the Firebase CLI:
+[info] 
+[info] 1. Take note of your session ID:
+[info] 
+[info]    C0C07
+[info] 
+[info] 2. Visit the URL below on any device and follow the instructions to get your code:
+[info] 
+[info]    https://auth.firebase.tools/login?code_challenge=UktgqjxUNV_5GrE2JSMfI_jDwSCKNPeIXI6dt9mk5Fc&session=c0c0722d-112c-4bb8-b78e-e23dd4832b0f&attest=6MptoFrCLmxSSBksLd3Pgzjr13hUpcsNcMU4wPf3eo8
+[info] 
+[info] 3. Paste or enter the authorization code below once you have it:
+[info] 

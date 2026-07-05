@@ -1,0 +1,20 @@
+# Git
+.git/
+.gitignore
+
+# Python
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/*.pyd
+backend/venv/
+
+# Node / React
+**/node_modules/
+frontend/dist/
+frontend/build/
+
+# Local configuration / secrets
+**/.env
+**/.env.local
+**/serviceAccountKey.json

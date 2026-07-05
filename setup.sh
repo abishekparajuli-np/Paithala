@@ -1,9 +1,9 @@
 #!/bin/bash
-# Setup script for THERMASCAN AI
+# Setup script for Paithala
 
 set -e
 
-echo "🏥 THERMASCAN AI - Setup Script"
+echo "🏥 Paithala - Setup Script"
 echo "================================"
 
 # Check prerequisites

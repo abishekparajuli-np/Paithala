@@ -10,3 +10,10 @@ flask-cors==4.0.0
 flask-socketio==5.3.4
 python-socketio==5.9.0
 python-engineio==4.7.1
+# Additional requirements for genomic analysis server
+# Install alongside existing backend/requirements.txt:
+#   pip install -r genomic_requirements.txt
+fastapi>=0.104.0
+uvicorn>=0.24.0
+python-multipart>=0.0.6
+firebase-admin>=6.2.0

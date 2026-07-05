@@ -1,3 +1,23 @@
-*.pth
- 
+# Python
 venv/
+*.pyc
+__pycache__/
+*.pth
+
+# Node / JS / React
+node_modules/
+dist/
+build/
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Firebase / Credentials
+serviceAccountKey.json
+
+# IDEs / OS
+.DS_Store
+.vscode/
+.idea/

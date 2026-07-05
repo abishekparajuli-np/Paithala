@@ -1,5 +1,5 @@
 """
-Admin utilities for THERMASCAN AI
+Admin utilities for Paithala
 
 Usage:
   python admin.py create-doctor <email> <password> <name> <clinic>
@@ -65,7 +65,7 @@ def delete_doctor(uid):
 if __name__ == '__main__':
     init_firebase()  # ← Firebase ready before anything else runs
 
-    parser = argparse.ArgumentParser(description='THERMASCAN AI Admin Utilities')
+    parser = argparse.ArgumentParser(description='Paithala Admin Utilities')
     subparsers = parser.add_subparsers(dest='command')
 
     create_parser = subparsers.add_parser('create-doctor')

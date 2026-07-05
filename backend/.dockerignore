@@ -1,0 +1,8 @@
+# Ignore local virtual environment and python cache
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.env
+serviceAccountKey.json
